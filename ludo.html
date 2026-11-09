@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ludo</title>
+<style>
+:root{--red:#e5484d;--green:#30a46c;--yellow:#f5c518;--blue:#3e63dd;--bs:min(94vw,600px)}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:14px;padding:16px;background:#1d2b2f;color:#eef3f2;font-family:Georgia,"Times New Roman",serif}
+h1{margin:0;font-size:1.6rem;letter-spacing:.02em}
+.bar{width:var(--bs);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.bar select,.bar button.new{font:inherit;font-size:.9rem;padding:6px 10px;border-radius:6px;border:1px solid #4b6167;background:#27393e;color:inherit;cursor:pointer}
+#status{display:flex;align-items:center;gap:8px;font-size:1.05rem;min-height:28px}
+#dot{width:14px;height:14px;border-radius:50%;background:#888;flex:none}
+#dice{width:64px;height:64px;font-size:46px;line-height:1;border-radius:12px;border:2px solid #fff;background:#fff;color:#111;cursor:pointer;padding:0;transition:transform .1s}
+#dice:disabled{opacity:.55;cursor:default}
+#dice:not(:disabled):hover{transform:scale(1.06)}
+#dice.rolling{animation:shake .15s infinite}
+@keyframes shake{25%{transform:rotate(-8deg)}75%{transform:rotate(8deg)}}
+#board{position:relative;width:var(--bs);aspect-ratio:1;display:grid;grid-template:repeat(15,1fr)/repeat(15,1fr);background:#fff;border:4px solid #fff;border-radius:6px;font-size:calc(var(--bs)/30)}
+.cell{position:relative;border:1px solid rgba(0,0,0,.22);background:#fff}
+.red{--c:var(--red)}.green{--c:var(--green)}.yellow{--c:var(--yellow)}.blue{--c:var(--blue)}
+.yard{background:var(--c);border-color:transparent}
+.yard.in{background:#fff;border-color:#fff}
+.spot::after{content:"";position:absolute;inset:12%;border-radius:50%;background:var(--c);opacity:.35}
+.hc,.st{background:var(--c)}
+.star::before{content:"\2605";position:absolute;inset:0;display:grid;place-items:center;color:#8a8a8a;font-size:1.2em}
+.hub{position:absolute;left:40%;top:40%;width:20%;height:20%;background:conic-gradient(from 45deg,var(--yellow) 0 90deg,var(--blue) 90deg 180deg,var(--red) 180deg 270deg,var(--green) 270deg 360deg);border:1px solid rgba(0,0,0,.3)}
+.off{filter:grayscale(1);opacity:.35}
+.piece{position:absolute;width:4.4%;aspect-ratio:1;border-radius:50%;transform:translate(-50%,-50%);background:radial-gradient(circle at 35% 30%,#fff9 0 14%,transparent 15%),var(--c);border:2px solid rgba(0,0,0,.65);box-shadow:0 2px 4px rgba(0,0,0,.4);transition:left .15s linear,top .15s linear;padding:0}
+.piece.can{cursor:pointer;animation:pulse .7s infinite;outline:3px solid #fff}
+@keyframes pulse{50%{scale:1.3}}
+@media (prefers-reduced-motion:reduce){.piece.can,#dice.rolling{animation:none}.piece{transition:none}}
+.bar[hidden]{display:none}.bar input{font:inherit;font-size:.9rem;padding:6px 10px;width:110px;border-radius:6px;border:1px solid #4b6167;background:#27393e;color:inherit}#netmsg{font-size:.9rem;opacity:.9}
+</style>
+</head>
+<body>
+<h1>Ludo</h1>
+<div class="bar">
+  <select id="count" aria-label="Players"><option value="2">2 players</option><option value="3">3 players</option><option value="4" selected>4 players</option></select>
+  <select id="mode" aria-label="Mode"><option value="cpu">You vs computer</option><option value="hot">Pass and play</option><option value="online">Online with a friend</option></select>
+  <button class="new" id="new">New game</button>
+</div>
+<div class="bar" id="net" hidden>
+  <button class="new" id="create">Create room</button>
+  <input id="code" placeholder="Friend's code" autocomplete="off" aria-label="Room code">
+  <button class="new" id="join">Join</button>
+  <span id="netmsg"></span>
+</div>
+<div class="bar">
+  <div id="status"><span id="dot"></span><span id="msg"></span></div>
+  <button id="dice" aria-label="Roll dice">&#9856;</button>
+</div>
+<div id="board"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const COLORS = ['red', 'green', 'yellow', 'blue'];
+const START = { red: 0, green: 13, yellow: 26, blue: 39 };
+const SAFE = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+const HEX = { red: '#e5484d', green: '#30a46c', yellow: '#f5c518', blue: '#3e63dd' };
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const cap = s => s[0].toUpperCase() + s.slice(1);
+
+// 52-cell main track as [row, col], clockwise from red's start square
+const PATH = [];
+[[6,1,0,1,5],[5,6,-1,0,6],[0,7,0,1,2],[1,8,1,0,5],[6,9,0,1,6],[7,14,1,0,2],
+ [8,13,0,-1,5],[9,8,1,0,6],[14,7,0,-1,2],[13,6,-1,0,5],[8,5,0,-1,6],[7,0,-1,0,2]]
+ .forEach(([r, c, dr, dc, n]) => { for (let i = 0; i < n; i++) PATH.push([r + dr * i, c + dc * i]); });
+
+// 5-cell home column per colour
+const HOME = {
+  red:    [1,2,3,4,5].map(c => [7, c]),
+  green:  [1,2,3,4,5].map(r => [r, 7]),
+  yellow: [13,12,11,10,9].map(c => [7, c]),
+  blue:   [13,12,11,10,9].map(r => [r, 7])
+};
+const OFF = { red: [0,0], green: [0,9], yellow: [9,9], blue: [9,0] };
+const YARD = {};
+COLORS.forEach(c => YARD[c] = [[2,2],[2,3],[3,2],[3,3]].map(([r, k]) => [r + OFF[c][0], k + OFF[c][1]]));
+
+// Piece progress p: -1 = in yard, 0..50 = main track, 51..55 = home column, 56 = home
+function cellOf(color, p, j) {
+  if (p === -1) return YARD[color][j];
+  if (p <= 50) return PATH[(START[color] + p) % 52];
+  if (p <= 55) return HOME[color][p - 51];
+  return [7, 7];
+}
+
+// ---------- Board ----------
+function buildBoard() {
+  const board = $('board');
+  board.innerHTML = '';
+  const pathIdx = new Map(PATH.map((rc, i) => [rc.join(), i]));
+  const homeCol = new Map();
+  COLORS.forEach(c => HOME[c].forEach(rc => homeCol.set(rc.join(), c)));
+  for (let r = 0; r < 15; r++) for (let c = 0; c < 15; c++) {
+    const d = document.createElement('div');
+    d.className = 'cell';
+    const q = r < 6 && c < 6 ? 'red' : r < 6 && c > 8 ? 'green' : r > 8 && c > 8 ? 'yellow' : r > 8 && c < 6 ? 'blue' : null;
+    if (q) {
+      const rr = r % 9, cc = c % 9;
+      d.classList.add('yard', q);
+      if (rr >= 1 && rr <= 4 && cc >= 1 && cc <= 4) d.classList.add('in');
+      if (rr >= 2 && rr <= 3 && cc >= 2 && cc <= 3) d.classList.add('spot');
+    } else if (r >= 6 && r <= 8 && c >= 6 && c <= 8) {
+      d.style.border = '0';
+    } else {
+      const key = r + ',' + c;
+      if (pathIdx.has(key)) {
+        const i = pathIdx.get(key);
+        const owner = COLORS.find(k => START[k] === i);
+        if (owner) d.classList.add('st', owner);
+        else if (SAFE.has(i)) d.classList.add('star');
+      } else if (homeCol.has(key)) d.classList.add('hc', homeCol.get(key));
+    }
+    board.appendChild(d);
+  }
+  const hub = document.createElement('div');
+  hub.className = 'hub';
+  board.appendChild(hub);
+}
+
+// ---------- Game state ----------
+let G, gameId = 0, net = null;
+const cur = () => G.players[G.turn];
+
+function newGame() {
+  if ($('mode').value === 'online') {
+    if (net && net.role === 'guest') { if (net.conn && net.conn.open) net.conn.send({ t: 'new' }); return; }
+    if (net && net.conn && net.conn.open) startGame(['red', 'yellow'], true); else showOnline();
+    return;
+  }
+  closeNet();
+  const n = +$('count').value;
+  startGame(n === 2 ? ['red', 'yellow'] : n === 3 ? ['red', 'green', 'yellow'] : COLORS, $('mode').value === 'hot');
+}
+
+function startGame(order, hot, asGuest) {
+  const gid = ++gameId;
+  buildBoard();
+  COLORS.forEach(c => { if (!order.includes(c)) document.querySelectorAll('.yard.' + c).forEach(e => e.classList.add('off')); });
+  G = { players: order.map((color, i) => ({ color, cpu: !hot && i > 0, p: [-1,-1,-1,-1], el: [] })), turn: 0, roll: 0, moves: [], phase: 'roll', gid };
+  G.players.forEach(pl => {
+    for (let j = 0; j < 4; j++) {
+      const el = document.createElement('button');
+      el.className = 'piece ' + pl.color;
+      el.style.setProperty('--c', HEX[pl.color]);
+      el.setAttribute('aria-label', cap(pl.color) + ' piece ' + (j + 1));
+      el.onclick = () => { if (G.phase === 'move' && cur() === pl && mine(pl) && G.moves.includes(j)) { if (net && net.role === 'guest') net.conn.send({ t: 'move', j }); else move(j); } };
+      $('board').appendChild(el);
+      pl.el.push(el);
+    }
+  });
+  hostSend({ t: 'init', order });
+  render();
+  if (!asGuest) startTurn();
+}
+
+function legal(pl, r) {
+  return [0,1,2,3].filter(j => { const p = pl.p[j]; return p === -1 ? r === 6 : p + r <= 56; });
+}
+
+function setStatus(text) {
+  $('msg').textContent = text;
+  $('dot').style.background = HEX[cur().color];
+  sync();
+}
+
+function startTurn() {
+  const pl = cur();
+  setStatus(cap(pl.color) + (pl.cpu ? ' (computer) is up' : ': roll the dice'));
+  $('dice').disabled = !mine(pl);
+  if (pl.cpu) { const g = G.gid; setTimeout(() => g === gameId && roll(), 700); }
+}
+
+function render() {
+  const groups = {};
+  G.players.forEach(pl => pl.p.forEach((p, j) => {
+    const rc = cellOf(pl.color, p, j);
+    pl.el[j]._rc = rc;
+    (groups[rc.join()] ??= []).push(pl.el[j]);
+  }));
+  for (const k in groups) {
+    const a = groups[k];
+    a.forEach((el, m) => {
+      const [r, c] = el._rc, d = (m - (a.length - 1) / 2) * 1.3;
+      el.style.left = ((c + .5) / 15 * 100 + d) + '%';
+      el.style.top = ((r + .5) / 15 * 100 - d * .6) + '%';
+      el.style.zIndex = 10 + m;
+    });
+  }
+  G.players.forEach(pl => pl.el.forEach((el, j) =>
+    el.classList.toggle('can', G.phase === 'move' && pl === cur() && mine(pl) && G.moves.includes(j))));
+  sync();
+}
+
+async function roll() {
+  if (G.phase !== 'roll') return;
+  const gid = G.gid;
+  G.phase = 'busy';
+  const dice = $('dice');
+  dice.classList.add('rolling');
+  const face = n => { dice.textContent = String.fromCharCode(0x267F + n); hostSend({ t: 'd', n }); };
+  for (let i = 0; i < 8; i++) { face(1 + Math.random() * 6 | 0); await sleep(70); }
+  if (gid !== gameId) return;
+  dice.classList.remove('rolling');
+  const r = G.roll = 1 + Math.random() * 6 | 0;
+  face(r);
+  const pl = cur();
+  G.moves = legal(pl, r);
+  if (!G.moves.length) {
+    setStatus(cap(pl.color) + ' rolled ' + r + ': no moves');
+    await sleep(900);
+    if (gid === gameId) nextTurn(false);
+    return;
+  }
+  G.phase = 'move';
+  setStatus(cap(pl.color) + ' rolled ' + r + (pl.cpu ? '' : ': pick a piece'));
+  render();
+  if (pl.cpu) { await sleep(700); if (gid === gameId) move(aiPick(pl, G.moves, r)); }
+}
+
+function aiPick(pl, moves, r) {
+  const score = j => {
+    const p = pl.p[j], np = p === -1 ? 0 : p + r;
+    let s = np;
+    if (np === 56) s += 100; else if (np > 50) s += 30;
+    if (np <= 50) {
+      const idx = (START[pl.color] + np) % 52;
+      if (SAFE.has(idx)) s += 15;
+      else if (G.players.some(o => o !== pl && o.p.some(q => q >= 0 && q <= 50 && (START[o.color] + q) % 52 === idx))) s += 80;
+    }
+    if (p === -1) s += 40;
+    return s;
+  };
+  return moves.reduce((a, b) => score(b) > score(a) ? b : a);
+}
+
+async function move(j) {
+  const gid = G.gid, pl = cur(), r = G.roll;
+  G.phase = 'busy';
+  G.moves = [];
+  render();
+  if (pl.p[j] === -1) { pl.p[j] = 0; render(); await sleep(250); }
+  else for (let s = 0; s < r; s++) { pl.p[j]++; render(); await sleep(170); if (gid !== gameId) return; }
+  if (gid !== gameId) return;
+
+  let captured = false;
+  const p = pl.p[j];
+  if (p <= 50) {
+    const idx = (START[pl.color] + p) % 52;
+    if (!SAFE.has(idx)) G.players.forEach(o => {
+      if (o === pl) return;
+      o.p.forEach((q, k) => { if (q >= 0 && q <= 50 && (START[o.color] + q) % 52 === idx) { o.p[k] = -1; captured = true; } });
+    });
+    render();
+  }
+  if (pl.p.every(q => q === 56)) {
+    G.phase = 'over';
+    setStatus('🏆 ' + cap(pl.color) + ' wins!');
+    $('dice').disabled = true;
+    return;
+  }
+  nextTurn(r === 6 || captured || p === 56);
+}
+
+function nextTurn(extra) {
+  if (!extra) G.turn = (G.turn + 1) % G.players.length;
+  G.phase = 'roll';
+  G.moves = [];
+  render();
+  startTurn();
+}
+
+// ---------- Online play (WebRTC via PeerJS; host runs the game, guest sends requests) ----------
+const mine = pl => !net ? !pl.cpu : net.role === 'host' ? pl.color === 'red' : pl.color === 'yellow';
+const hostSend = m => { if (net && net.role === 'host' && net.conn && net.conn.open) net.conn.send(m); };
+const netMsg = t => $('netmsg').textContent = t;
+
+function sync() {
+  if (!G || !G.players.length) return;
+  hostSend({ t: 's', p: G.players.map(x => x.p), turn: G.turn, phase: G.phase, moves: G.moves, roll: G.roll, msg: $('msg').textContent });
+}
+
+function closeNet() {
+  if (net) { net.peer.destroy(); net = null; }
+  netMsg('');
+}
+
+function showOnline() {
+  gameId++;
+  buildBoard();
+  G = { players: [], turn: 0, roll: 0, moves: [], phase: 'idle', gid: gameId };
+  $('dice').disabled = true;
+  $('dot').style.background = '#888';
+  $('msg').textContent = "Create a room, or enter your friend's code to join";
+}
+
+function createRoom() {
+  if (typeof Peer === 'undefined') return netMsg('Could not load PeerJS. Check your internet connection.');
+  closeNet();
+  const code = Math.random().toString(36).slice(2, 7);
+  const peer = new Peer('ludo-' + code);
+  net = { role: 'host', peer, conn: null };
+  peer.on('open', () => netMsg('Room code: ' + code + ' (send it to your friend)'));
+  peer.on('connection', c => {
+    if (net.conn && net.conn.open) return c.close();
+    net.conn = c;
+    c.on('open', () => { netMsg('Friend connected. You are red.'); startGame(['red', 'yellow'], true); });
+    c.on('data', onData);
+    c.on('close', () => netMsg('Your friend left the game.'));
+  });
+  peer.on('error', e => e.type === 'unavailable-id' ? createRoom() : netMsg('Connection error: ' + e.type));
+}
+
+function joinRoom() {
+  const code = $('code').value.trim().toLowerCase();
+  if (!code) return netMsg('Enter the room code first.');
+  if (typeof Peer === 'undefined') return netMsg('Could not load PeerJS. Check your internet connection.');
+  closeNet();
+  const peer = new Peer();
+  net = { role: 'guest', peer, conn: null };
+  peer.on('open', () => {
+    const c = net.conn = peer.connect('ludo-' + code, { reliable: true });
+    c.on('open', () => netMsg('Connected. You are yellow.'));
+    c.on('data', onData);
+    c.on('close', () => netMsg('Connection lost.'));
+  });
+  peer.on('error', e => netMsg(e.type === 'peer-unavailable' ? 'Room not found. Check the code.' : 'Connection error: ' + e.type));
+}
+
+function onData(m) {
+  if (net.role === 'guest') {
+    if (m.t === 'init') startGame(m.order, true, true);
+    else if (m.t === 'd') $('dice').textContent = String.fromCharCode(0x267F + m.n);
+    else if (m.t === 's' && G.players.length) {
+      G.players.forEach((pl, i) => pl.p = m.p[i]);
+      Object.assign(G, { turn: m.turn, phase: m.phase, moves: m.moves, roll: m.roll });
+      render();
+      $('msg').textContent = m.msg;
+      $('dot').style.background = HEX[cur().color];
+      $('dice').disabled = !(m.phase === 'roll' && mine(cur()));
+    }
+  } else if (G.players.length) {
+    const yellow = cur().color === 'yellow';
+    if (m.t === 'roll' && yellow && G.phase === 'roll') roll();
+    else if (m.t === 'move' && yellow && G.phase === 'move' && G.moves.includes(m.j)) move(m.j);
+    else if (m.t === 'new') startGame(['red', 'yellow'], true);
+  }
+}
+
+$('dice').onclick = () => {
+  if (G.phase !== 'roll' || !mine(cur())) return;
+  if (net && net.role === 'guest') { net.conn.send({ t: 'roll' }); $('dice').disabled = true; } else roll();
+};
+$('new').onclick = newGame;
+$('count').onchange = newGame;
+$('create').onclick = createRoom;
+$('join').onclick = joinRoom;
+$('mode').onchange = () => {
+  const online = $('mode').value === 'online';
+  $('count').hidden = online;
+  $('net').hidden = !online;
+  if (online) { closeNet(); showOnline(); } else newGame();
+};
+newGame();
+</script>
+</body>
+</html>
