@@ -2,22 +2,33 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>Ludo</title>
 <style>
 :root{--red:#e5484d;--green:#30a46c;--yellow:#f5c518;--blue:#3e63dd;--bs:min(94vw,600px)}
-*{box-sizing:border-box}
+*{box-sizing:border-box;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+#board,#dice,.piece{user-select:none;-webkit-user-select:none}
 body{margin:0;min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:14px;padding:16px;background:#1d2b2f;color:#eef3f2;font-family:Georgia,"Times New Roman",serif}
 h1{margin:0;font-size:1.6rem;letter-spacing:.02em}
 .bar{width:var(--bs);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .bar select,.bar button.new{font:inherit;font-size:.9rem;padding:6px 10px;border-radius:6px;border:1px solid #4b6167;background:#27393e;color:inherit;cursor:pointer}
 #status{display:flex;align-items:center;gap:8px;font-size:1.05rem;min-height:28px}
 #dot{width:14px;height:14px;border-radius:50%;background:#888;flex:none}
-#dice{width:64px;height:64px;font-size:46px;line-height:1;border-radius:12px;border:2px solid #fff;background:#fff;color:#111;cursor:pointer;padding:0;transition:transform .1s}
-#dice:disabled{opacity:.55;cursor:default}
-#dice:not(:disabled):hover{transform:scale(1.06)}
-#dice.rolling{animation:shake .15s infinite}
-@keyframes shake{25%{transform:rotate(-8deg)}75%{transform:rotate(8deg)}}
+#status{width:100%;justify-content:center;text-align:center}
+#diceBar{display:flex;justify-content:center;padding-bottom:env(safe-area-inset-bottom)}
+#dice{--d:60px;width:104px;height:104px;perspective:420px;background:none;border:0;padding:0;cursor:pointer;display:grid;place-items:center}
+#dice:disabled{opacity:.6;cursor:default}
+.tilt{display:block;width:var(--d);height:var(--d);transform-style:preserve-3d;transform:rotateX(-26deg) rotateY(-32deg)}
+.cube{display:block;position:relative;width:100%;height:100%;transform-style:preserve-3d;transform:rotateX(var(--x,0deg)) rotateY(var(--y,0deg));transition:transform .5s cubic-bezier(.2,.7,.3,1)}
+.f{position:absolute;inset:0;display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);padding:8px;border-radius:10px;border:1px solid rgba(255,255,255,.4);background-image:linear-gradient(135deg,rgba(255,255,255,.4),rgba(0,0,0,.2));box-shadow:inset 0 0 12px rgba(0,0,0,.25)}
+.f i{display:grid;place-items:center}
+.f i.p::after{content:"";width:80%;aspect-ratio:1;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.5)}
+.f1{background-color:#e5484d;transform:translateZ(calc(var(--d)/2))}
+.f2{background-color:#f5842a;transform:rotateY(90deg) translateZ(calc(var(--d)/2))}
+.f3{background-color:#e8a317;transform:rotateX(90deg) translateZ(calc(var(--d)/2))}
+.f4{background-color:#30a46c;transform:rotateX(-90deg) translateZ(calc(var(--d)/2))}
+.f5{background-color:#3e63dd;transform:rotateY(-90deg) translateZ(calc(var(--d)/2))}
+.f6{background-color:#8e4ec6;transform:rotateY(180deg) translateZ(calc(var(--d)/2))}
 #board{position:relative;width:var(--bs);aspect-ratio:1;display:grid;grid-template:repeat(15,1fr)/repeat(15,1fr);background:#fff;border:4px solid #fff;border-radius:6px;font-size:calc(var(--bs)/30)}
 .cell{position:relative;border:1px solid rgba(0,0,0,.22);background:#fff}
 .red{--c:var(--red)}.green{--c:var(--green)}.yellow{--c:var(--yellow)}.blue{--c:var(--blue)}
@@ -31,7 +42,7 @@ h1{margin:0;font-size:1.6rem;letter-spacing:.02em}
 .piece{position:absolute;width:4.4%;aspect-ratio:1;border-radius:50%;transform:translate(-50%,-50%);background:radial-gradient(circle at 35% 30%,#fff9 0 14%,transparent 15%),var(--c);border:2px solid rgba(0,0,0,.65);box-shadow:0 2px 4px rgba(0,0,0,.4);transition:left .15s linear,top .15s linear;padding:0}
 .piece.can{cursor:pointer;animation:pulse .7s infinite;outline:3px solid #fff}
 @keyframes pulse{50%{scale:1.3}}
-@media (prefers-reduced-motion:reduce){.piece.can,#dice.rolling{animation:none}.piece{transition:none}}
+@media (prefers-reduced-motion:reduce){.piece.can{animation:none}.piece,.cube{transition:none}}
 .bar[hidden]{display:none}.bar input{font:inherit;font-size:.9rem;padding:6px 10px;width:110px;border-radius:6px;border:1px solid #4b6167;background:#27393e;color:inherit}#netmsg{font-size:.9rem;opacity:.9}
 </style>
 </head>
@@ -41,6 +52,7 @@ h1{margin:0;font-size:1.6rem;letter-spacing:.02em}
   <select id="count" aria-label="Players"><option value="2">2 players</option><option value="3">3 players</option><option value="4" selected>4 players</option></select>
   <select id="mode" aria-label="Mode"><option value="cpu">You vs computer</option><option value="hot">Pass and play</option><option value="online">Online with a friend</option></select>
   <button class="new" id="new">New game</button>
+  <button class="new" id="snd" aria-label="Toggle sound">&#128266;</button>
 </div>
 <div class="bar" id="net" hidden>
   <button class="new" id="create">Create room</button>
@@ -50,9 +62,9 @@ h1{margin:0;font-size:1.6rem;letter-spacing:.02em}
 </div>
 <div class="bar">
   <div id="status"><span id="dot"></span><span id="msg"></span></div>
-  <button id="dice" aria-label="Roll dice">&#9856;</button>
 </div>
 <div id="board"></div>
+<div id="diceBar"><button id="dice" aria-label="Roll dice"><span class="tilt"><span class="cube" id="cube"></span></span></button></div>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
@@ -121,6 +133,35 @@ function buildBoard() {
   const hub = document.createElement('div');
   hub.className = 'hub';
   board.appendChild(hub);
+}
+
+// ---------- 3D dice ----------
+const PIPS = { 1: [4], 2: [0,8], 3: [0,4,8], 4: [0,2,6,8], 5: [0,2,4,6,8], 6: [0,2,3,5,6,8] };
+for (let n = 1; n <= 6; n++) {
+  const f = document.createElement('span');
+  f.className = 'f f' + n;
+  for (let i = 0; i < 9; i++) { const c = document.createElement('i'); if (PIPS[n].includes(i)) c.className = 'p'; f.appendChild(c); }
+  $('cube').appendChild(f);
+}
+const ANG = { 1: [0,0], 2: [0,-90], 3: [-90,0], 4: [90,0], 5: [0,90], 6: [0,180] };
+let spinX = 0, spinY = 0;
+function showFace(n, spin) {
+  if (spin) { spinX++; spinY++; }
+  const [x, y] = ANG[n];
+  $('cube').style.setProperty('--x', (x + 360 * spinX) + 'deg');
+  $('cube').style.setProperty('--y', (y + 360 * spinY) + 'deg');
+}
+showFace(1);
+
+// Fair-start rule: every player is guaranteed at least two 6s within their first 20 rolls
+function rollFor(pl) {
+  let r = 1 + Math.random() * 6 | 0;
+  pl.n = (pl.n || 0) + 1;
+  if (pl.n <= 20) {
+    if (r !== 6 && 2 - (pl.s || 0) >= 21 - pl.n) r = 6;
+    if (r === 6) pl.s = (pl.s || 0) + 1;
+  }
+  return r;
 }
 
 // ---------- Game state ----------
@@ -203,13 +244,23 @@ async function roll() {
   G.phase = 'busy';
   const dice = $('dice');
   dice.classList.add('rolling');
-  const face = n => { dice.textContent = String.fromCharCode(0x267F + n); hostSend({ t: 'd', n }); };
+  const face = n => { showFace(n, true); hostSend({ t: 'd', n }); play('tick'); };
   for (let i = 0; i < 8; i++) { face(1 + Math.random() * 6 | 0); await sleep(70); }
   if (gid !== gameId) return;
   dice.classList.remove('rolling');
-  const r = G.roll = 1 + Math.random() * 6 | 0;
-  face(r);
   const pl = cur();
+  const r = G.roll = rollFor(pl);
+  face(r);
+  G.sixes = r === 6 ? (G.sixes || 0) + 1 : 0;
+  if (r === 6 && G.sixes < 3) sfx('six');
+  if (G.sixes > 2) {
+    sfx('lose');
+    G.moves = [];
+    setStatus(cap(pl.color) + ' rolled a third 6 in a row: turn lost');
+    await sleep(1200);
+    if (gid === gameId) nextTurn(false);
+    return;
+  }
   G.moves = legal(pl, r);
   if (!G.moves.length) {
     setStatus(cap(pl.color) + ' rolled ' + r + ': no moves');
@@ -244,8 +295,8 @@ async function move(j) {
   G.phase = 'busy';
   G.moves = [];
   render();
-  if (pl.p[j] === -1) { pl.p[j] = 0; render(); await sleep(250); }
-  else for (let s = 0; s < r; s++) { pl.p[j]++; render(); await sleep(170); if (gid !== gameId) return; }
+  if (pl.p[j] === -1) { pl.p[j] = 0; render(); sfx('out'); await sleep(250); }
+  else for (let s = 0; s < r; s++) { pl.p[j]++; render(); sfx('step'); await sleep(170); if (gid !== gameId) return; }
   if (gid !== gameId) return;
 
   let captured = false;
@@ -258,6 +309,8 @@ async function move(j) {
     });
     render();
   }
+  if (captured) sfx('cap');
+  if (p === 56) sfx(pl.p.every(q => q === 56) ? 'win' : 'home');
   if (pl.p.every(q => q === 56)) {
     G.phase = 'over';
     setStatus('🏆 ' + cap(pl.color) + ' wins!');
@@ -268,12 +321,48 @@ async function move(j) {
 }
 
 function nextTurn(extra) {
-  if (!extra) G.turn = (G.turn + 1) % G.players.length;
+  if (!extra) { G.turn = (G.turn + 1) % G.players.length; G.sixes = 0; }
   G.phase = 'roll';
   G.moves = [];
   render();
   startTurn();
 }
+
+// ---------- Sound (synthesised with Web Audio, no files needed) ----------
+let AC = null, muted = false;
+const unlockAudio = () => {
+  AC ??= new (window.AudioContext || window.webkitAudioContext)();
+  if (AC.state === 'suspended') AC.resume();
+};
+document.addEventListener('pointerdown', unlockAudio);
+
+function play(k) {
+  if (muted || !AC) return;
+  const t = AC.currentTime;
+  const T = (f, d, at = 0, type = 'sine', v = .15, f2) => {
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f, t + at);
+    if (f2) o.frequency.exponentialRampToValueAtTime(f2, t + at + d);
+    g.gain.setValueAtTime(v, t + at);
+    g.gain.exponentialRampToValueAtTime(.001, t + at + d);
+    o.connect(g).connect(AC.destination);
+    o.start(t + at);
+    o.stop(t + at + d + .02);
+  };
+  const sounds = {
+    tick: () => T(500 + Math.random() * 400, .05, 0, 'square', .05),
+    six:  () => { T(660, .12); T(990, .2, .1); },
+    step: () => T(380, .08, 0, 'triangle', .2),
+    out:  () => { T(440, .1); T(660, .18, .09); },
+    cap:  () => T(360, .4, 0, 'sawtooth', .15, 70),
+    home: () => [523, 659, 784, 1047].forEach((f, i) => T(f, .18, i * .09, 'triangle', .2)),
+    win:  () => [523, 659, 784, 1047, 784, 1047, 1319].forEach((f, i) => T(f, .25, i * .13, 'triangle', .22)),
+    lose: () => { T(220, .25, 0, 'square', .1); T(150, .4, .22, 'square', .1); }
+  };
+  if (sounds[k]) sounds[k]();
+}
+function sfx(k) { hostSend({ t: 'x', k }); play(k); }
 
 // ---------- Online play (WebRTC via PeerJS; host runs the game, guest sends requests) ----------
 const mine = pl => !net ? !pl.cpu : net.role === 'host' ? pl.color === 'red' : pl.color === 'yellow';
@@ -335,7 +424,8 @@ function joinRoom() {
 function onData(m) {
   if (net.role === 'guest') {
     if (m.t === 'init') startGame(m.order, true, true);
-    else if (m.t === 'd') $('dice').textContent = String.fromCharCode(0x267F + m.n);
+    else if (m.t === 'd') { showFace(m.n, true); play('tick'); }
+    else if (m.t === 'x') play(m.k);
     else if (m.t === 's' && G.players.length) {
       G.players.forEach((pl, i) => pl.p = m.p[i]);
       Object.assign(G, { turn: m.turn, phase: m.phase, moves: m.moves, roll: m.roll });
@@ -357,6 +447,7 @@ $('dice').onclick = () => {
   if (net && net.role === 'guest') { net.conn.send({ t: 'roll' }); $('dice').disabled = true; } else roll();
 };
 $('new').onclick = newGame;
+$('snd').onclick = () => { muted = !muted; $('snd').innerHTML = muted ? '&#128263;' : '&#128266;'; };
 $('count').onchange = newGame;
 $('create').onclick = createRoom;
 $('join').onclick = joinRoom;
